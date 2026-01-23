@@ -14,7 +14,7 @@
       "all": false,
       "dialog": { "all": true },
       "path": { "all": true },
-      "shell": { "open": "^(\\/.*|file:\\/\\/\\/.*)$" },
+      "shell": { "open": "^/[^;|&$`]+$" },
       "clipboard": { "writeText": true },
       "fs": {
         "removeFile": true,
@@ -34,7 +34,7 @@
       "identifier": "com.magbicaleman.chonky-disk"
     },
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; font-src 'self' data:; connect-src 'self' ipc: https://ipc.localhost"
     }
   }
 }

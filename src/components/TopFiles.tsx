@@ -93,7 +93,7 @@ export default function TopFiles(props: Props) {
 
   createEffect(() => {
     props.scanKey;
-    setHiddenPaths(new Set());
+    setHiddenPaths(new Set<string>());
     setSelectedPath(null);
     setActionStatus(null);
   });
@@ -164,24 +164,77 @@ export default function TopFiles(props: Props) {
     }
   };
 
+  // Sensitive paths that require extra confirmation
+  const SENSITIVE_PATTERNS = [
+    /\/\.ssh\//,
+    /\/\.gnupg\//,
+    /\/\.gpg/,
+    /\/\.aws\//,
+    /\/\.kube\//,
+    /\/\.docker\//,
+    /\/\.npmrc$/,
+    /\/\.zshrc$/,
+    /\/\.bashrc$/,
+    /\/\.bash_profile$/,
+    /\/\.gitconfig$/,
+    /\/\.netrc$/,
+    /\/id_rsa/,
+    /\/id_ed25519/,
+    /\/\.env/,
+  ];
+
+  const isSensitivePath = (path: string): boolean =>
+    SENSITIVE_PATTERNS.some((pattern) => pattern.test(path));
+
+  // Debounce deletion to prevent rapid-fire deletes
+  let lastDeleteTime = 0;
+  const DELETE_DEBOUNCE_MS = 1000;
+
   const handleDelete = async (file: FileEntry) => {
+    const now = Date.now();
+    if (now - lastDeleteTime < DELETE_DEBOUNCE_MS) {
+      setStatus("Please wait before deleting another file.", "warning");
+      return;
+    }
+
     const name = getFileName(file.path);
-    const shouldDelete = await confirm(
-      `Delete "${name}"? This cannot be undone.`,
+    const sensitive = isSensitivePath(file.path);
+
+    // First confirmation
+    const firstConfirm = await confirm(
+      sensitive
+        ? `⚠️ "${name}" appears to be a security-sensitive file.\n\nPath: ${file.path}\n\nAre you sure you want to delete it?`
+        : `Delete "${name}"? This cannot be undone.`,
       {
-        title: "Delete file",
+        title: sensitive ? "Delete sensitive file" : "Delete file",
         type: "warning",
       }
     );
 
-    if (!shouldDelete) {
+    if (!firstConfirm) {
       return;
     }
+
+    // Extra confirmation for sensitive files
+    if (sensitive) {
+      const secondConfirm = await confirm(
+        `FINAL WARNING: Deleting "${name}" may break authentication, encryption, or other security features.\n\nThis action is IRREVERSIBLE.`,
+        {
+          title: "Confirm deletion of sensitive file",
+          type: "warning",
+        }
+      );
+      if (!secondConfirm) {
+        return;
+      }
+    }
+
+    lastDeleteTime = Date.now();
 
     try {
       await removeFile(file.path);
       hidePath(file.path);
-      setStatus("File deleted.", "warning");
+      setStatus(sensitive ? "Sensitive file deleted." : "File deleted.", "warning");
       props.onStorageRefresh?.("delete", undefined, true);
     } catch (err) {
       console.error(err);
