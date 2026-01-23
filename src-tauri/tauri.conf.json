@@ -1,0 +1,40 @@
+{
+  "build": {
+    "beforeDevCommand": "npm run dev",
+    "beforeBuildCommand": "npm run build",
+    "devPath": "http://localhost:5173",
+    "distDir": "../dist"
+  },
+  "package": {
+    "productName": "Chonky Disk",
+    "version": "0.1.0"
+  },
+  "tauri": {
+    "allowlist": {
+      "all": false,
+      "dialog": { "all": true },
+      "path": { "all": true },
+      "shell": { "open": "^(\\/.*|file:\\/\\/\\/.*)$" },
+      "clipboard": { "writeText": true },
+      "fs": {
+        "removeFile": true,
+        "scope": ["$HOME/**", "$HOME/.*", "$HOME/.*/**"]
+      }
+    },
+    "windows": [
+      {
+        "title": "Chonky Disk",
+        "width": 960,
+        "height": 640,
+        "resizable": true
+      }
+    ],
+    "bundle": {
+      "active": true,
+      "identifier": "com.magbicaleman.chonky-disk"
+    },
+    "security": {
+      "csp": null
+    }
+  }
+}

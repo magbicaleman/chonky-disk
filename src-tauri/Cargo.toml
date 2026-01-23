@@ -1,0 +1,21 @@
+[package]
+name = "chonky-disk"
+version = "0.1.0"
+description = "Lightweight macOS disk usage analyzer"
+authors = ["you"]
+license = "MIT"
+edition = "2021"
+build = "build.rs"
+
+[build-dependencies]
+tauri-build = { version = "1.5", features = [] }
+
+[dependencies]
+libc = "0.2"
+notify = "6.1.1"
+tauri = { version = "1.5", features = [ "clipboard-write-text", "shell-open", "fs-remove-file", "dialog-all", "path-all"] }
+serde = { version = "1", features = ["derive"] }
+
+[features]
+default = ["custom-protocol"]
+custom-protocol = ["tauri/custom-protocol"]
