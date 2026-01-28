@@ -11,6 +11,7 @@ use std::ffi::CString;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::path::PathBuf;
+use std::ptr;
 use std::sync::{
   atomic::{AtomicBool, Ordering},
   Arc, Mutex,
@@ -86,9 +87,9 @@ fn path_is_file(path: &Path) -> bool {
 
 fn start_fs_watcher(app: tauri::AppHandle, root: PathBuf, scan_id: u64, watch_generation: u64) {
   thread::spawn(move || {
-    let (tx, rx) = mpsc::channel();
+    let (tx, rx) = mpsc::sync_channel(1024);
     let mut watcher: RecommendedWatcher = match notify::recommended_watcher(move |res| {
-      let _ = tx.send(res);
+      let _ = tx.try_send(res);
     }) {
       Ok(watcher) => watcher,
       Err(_) => return,
@@ -137,7 +138,7 @@ fn start_fs_watcher(app: tauri::AppHandle, root: PathBuf, scan_id: u64, watch_ge
           size,
         };
 
-        let _ = app.emit_all("scan_fs_change", payload);
+        let _ = app.emit_to("main", "scan_fs_change", payload);
       }
     }
   });
@@ -187,12 +188,13 @@ fn volume_name_for_path(path: &PathBuf) -> Option<String> {
     return None;
   }
 
-  let attr_ref = unsafe { *(buffer.as_ptr().add(4) as *const AttrReference) };
+  let attr_ref = unsafe { ptr::read_unaligned(buffer.as_ptr().add(4) as *const AttrReference) };
   if attr_ref.attr_dataoffset < 0 {
     return None;
   }
-  let start = 4usize + attr_ref.attr_dataoffset as usize;
-  let end = start + attr_ref.attr_length as usize;
+  let offset = usize::try_from(attr_ref.attr_dataoffset).ok()?;
+  let start = 4usize.checked_add(offset)?;
+  let end = start.checked_add(attr_ref.attr_length as usize)?;
   if end > buffer.len() {
     return None;
   }
@@ -280,6 +282,17 @@ fn cancel_scan(scan_id: u64, state: tauri::State<Mutex<ScanState>>) -> Result<bo
 }
 
 #[tauri::command]
+fn delete_file(path: String) -> Result<bool, String> {
+  let path = PathBuf::from(path);
+  let metadata = fs::symlink_metadata(&path).map_err(|_| "File not found".to_string())?;
+  if !metadata.is_file() || metadata.file_type().is_symlink() {
+    return Err("Only regular files can be deleted".to_string());
+  }
+  fs::remove_file(&path).map_err(|_| "Unable to delete file".to_string())?;
+  Ok(true)
+}
+
+#[tauri::command]
 #[cfg(target_family = "unix")]
 fn disk_overview(root_path: String) -> Result<DiskOverview, String> {
   let root = PathBuf::from(root_path.clone());
@@ -340,6 +353,7 @@ fn main() {
     .invoke_handler(tauri::generate_handler![
       start_scan,
       cancel_scan,
+      delete_file,
       disk_overview
     ])
     .run(tauri::generate_context!())

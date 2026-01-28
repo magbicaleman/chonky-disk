@@ -201,5 +201,5 @@ fn emit_progress(
     top_files,
   };
 
-  let _ = app.emit_all(event_name, payload);
+  let _ = app.emit_to("main", event_name, payload);
 }

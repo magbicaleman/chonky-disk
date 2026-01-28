@@ -13,7 +13,7 @@ tauri-build = { version = "1.5", features = [] }
 [dependencies]
 libc = "0.2"
 notify = "6.1.1"
-tauri = { version = "1.5", features = [ "clipboard-write-text", "shell-open", "fs-remove-file", "dialog-all", "path-all"] }
+tauri = { version = "1.5", features = [ "clipboard-write-text", "shell-open", "dialog-all", "path-all"] }
 serde = { version = "1", features = ["derive"] }
 
 [features]

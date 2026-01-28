@@ -1,9 +1,9 @@
 import { Index, Show, createEffect, createMemo, createSignal } from "solid-js";
 import { writeText } from "@tauri-apps/api/clipboard";
 import { confirm } from "@tauri-apps/api/dialog";
-import { removeFile } from "@tauri-apps/api/fs";
 import { dirname } from "@tauri-apps/api/path";
 import { open as openPath } from "@tauri-apps/api/shell";
+import { invoke } from "@tauri-apps/api/tauri";
 import type { FileEntry } from "../stores/scan";
 import { formatBytes } from "../utils/format";
 
@@ -232,7 +232,7 @@ export default function TopFiles(props: Props) {
     lastDeleteTime = Date.now();
 
     try {
-      await removeFile(file.path);
+      await invoke("delete_file", { path: file.path });
       hidePath(file.path);
       setStatus(sensitive ? "Sensitive file deleted." : "File deleted.", "warning");
       props.onStorageRefresh?.("delete", undefined, true);

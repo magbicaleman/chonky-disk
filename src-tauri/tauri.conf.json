@@ -17,8 +17,8 @@
       "shell": { "open": "^/[^;|&$`]+$" },
       "clipboard": { "writeText": true },
       "fs": {
-        "removeFile": true,
-        "scope": ["$HOME/**", "$HOME/.*", "$HOME/.*/**"]
+        "removeFile": false,
+        "scope": []
       }
     },
     "windows": [
