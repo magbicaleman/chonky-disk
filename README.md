@@ -1,5 +1,7 @@
 # ChonkyDisk
 
+![Chonky Disk screenshot](assets/screenshot.png)
+
 A lightweight macOS desktop app for scanning disk usage and identifying the largest files on your system.
 
 Built with **Tauri**, **Rust**, and **SolidJS**.
