@@ -10,8 +10,18 @@ Built with **Tauri**, **Rust**, and **SolidJS**.
 
 - macOS disk usage scanner
 - Streams progress and top 50 largest files in real time
-- Rust backend, SolidJS frontend
+- Rust backend, SolidJS frontend (Tauri IPC via commands + events)
+- Includes disk overview, file actions (reveal/open/copy/delete), and post-scan watching
 - Built as an experiment in AI-assisted, modern OS-level app development
+
+### Run it locally
+
+```bash
+npm install
+npm run tauri dev
+```
+
+> Requires Node.js and a Rust toolchain (rustc + cargo). See **Build notes** if you hit setup issues.
 
 ---
 
@@ -148,9 +158,95 @@ Filesystem access is centralized and auditable.
 
 ---
 
+## Build notes
+
+This project uses Tauri with a Rust backend and a SolidJS frontend.
+
+You will need:
+
+- Node.js + npm
+- Rust toolchain (rustc + cargo)
+
+If you have an older Rust installation, the build may fail with errors related to unsupported compiler versions or missing toolchain components. Updating Rust fixes most of these issues.
+
+Recommended:
+
+```bash
+rustup update
+rustup toolchain list
+rustc --version
+cargo --version
+```
+
+---
+
+## Troubleshooting
+
+### Cargo or Rust is out of date
+
+Symptoms:
+
+- compile errors in dependencies
+- messages about minimum supported Rust version (MSRV)
+- build scripts failing unexpectedly
+
+Fix:
+
+```bash
+rustup update
+cargo clean
+npm run tauri dev
+```
+
+### Working through build issues with an LLM
+
+This repo was built with help from an LLM, and it is totally in-scope to use your LLM of choice to debug local environment issues.
+
+A good prompt to use:
+
+> I am building a Tauri app with a Rust backend. Here is my terminal error output. Please identify whether this is a Rust MSRV/toolchain issue, a missing system dependency, or a Tauri config issue. Provide the minimal steps to fix it on macOS.
+
+If you open an issue, include:
+
+- your macOS version
+- `rustc --version`
+- `cargo --version`
+- the full error output
+
+---
+
 ## Tech stack
 
 - **Tauri**
 - **Rust**
 - **SolidJS**
-- **TypeScr**
+- **TypeScript**
+
+---
+
+## Project goals
+
+This is a personal project and an experiment, not a commercial product.
+
+Goals:
+
+- Explore modern desktop app architecture
+- Test how effectively an LLM can guide system-level development
+- Build a tool that solves a real personal problem
+- Keep the codebase small and understandable
+
+Non-goals:
+
+- Feature parity with DaisyDisk
+- Fancy visualizations
+- Cross-platform polish
+- Persistent indexing or background scans
+
+---
+
+## Status
+
+The app is functional and usable today.
+
+It may grow, or it may remain intentionally small.  
+That outcome is part of the experiment.
