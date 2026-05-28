@@ -86,15 +86,6 @@ export default function FolderMap(props: Props) {
   const rootPath = createMemo(() => props.rootPath.trim());
   const rootState = createMemo(() => nodes()[rootPath()]);
 
-  const displayRootName = createMemo(() => {
-    const path = rootPath();
-    if (!path) {
-      return "No folder selected";
-    }
-    const parts = path.split(/[\\/]/).filter(Boolean);
-    return parts[parts.length - 1] || path;
-  });
-
   const setStatus = (message: string, tone: "success" | "error" = "success") => {
     setActionStatus({ message, tone });
   };
@@ -892,12 +883,10 @@ export default function FolderMap(props: Props) {
   return (
     <div class="card folder-map">
       <div class="card__header">
-        <div>
-          <h2>Folder Tree</h2>
-          <div class="hint" title={rootPath()}>
-            {displayRootName()}
-            <Show when={rootState()?.stale}> / needs refresh</Show>
-          </div>
+        <div class="hint" title={rootPath()}>
+          <Show when={rootState()?.stale} fallback={"Sorted by disk used"}>
+            Needs refresh — values may be stale
+          </Show>
         </div>
         <div class="folder-map__actions">
           <button
