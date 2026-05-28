@@ -11,6 +11,7 @@ import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/api/dialog";
 import { homeDir } from "@tauri-apps/api/path";
 import { invoke } from "@tauri-apps/api/tauri";
+import FolderMap from "./components/FolderMap";
 import TopFiles from "./components/TopFiles";
 import { scanState, setScanState, type ScanProgress } from "./stores/scan";
 import { formatBytes, formatDuration } from "./utils/format";
@@ -47,6 +48,8 @@ type LogEntry = {
   message: string;
 };
 
+type ResultsView = "files" | "folders";
+
 const HISTORY_STORAGE_KEY = "chonky.scanHistory.v1";
 const TOP_FILES_LIMIT = 50;
 const DISK_REFRESH_THROTTLE_MS = 8000;
@@ -71,6 +74,7 @@ export default function App() {
   const [diskLoading, setDiskLoading] = createSignal(false);
   const [activityLog, setActivityLog] = createSignal<LogEntry[]>([]);
   const [error, setError] = createSignal<string | null>(null);
+  const [resultsView, setResultsView] = createSignal<ResultsView>("files");
 
   let unlistenProgress: (() => void) | undefined;
   let unlistenComplete: (() => void) | undefined;
@@ -691,11 +695,38 @@ export default function App() {
             </Show>
           </div>
         </div>
-        <TopFiles
-          files={scanState.topFiles}
-          scanKey={scanKey()}
-          onStorageRefresh={requestDiskRefresh}
-        />
+        <div class="results-column">
+          <div class="view-switcher" role="tablist" aria-label="Results view">
+            <button
+              class="view-switcher__button"
+              classList={{ "is-active": resultsView() === "files" }}
+              role="tab"
+              aria-selected={resultsView() === "files"}
+              onClick={() => setResultsView("files")}
+            >
+              Top Files
+            </button>
+            <button
+              class="view-switcher__button"
+              classList={{ "is-active": resultsView() === "folders" }}
+              role="tab"
+              aria-selected={resultsView() === "folders"}
+              onClick={() => setResultsView("folders")}
+            >
+              Folders
+            </button>
+          </div>
+          <Show
+            when={resultsView() === "files"}
+            fallback={<FolderMap rootPath={folder()} />}
+          >
+            <TopFiles
+              files={scanState.topFiles}
+              scanKey={scanKey()}
+              onStorageRefresh={requestDiskRefresh}
+            />
+          </Show>
+        </div>
       </section>
 
       <section class="card activity">

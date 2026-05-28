@@ -3,6 +3,7 @@ mod scanner;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use scanner::DEFAULT_TOP_N;
 use serde::Serialize;
+use std::collections::VecDeque;
 #[cfg(target_os = "macos")]
 use std::ffi::CStr;
 #[cfg(target_family = "unix")]
@@ -54,6 +55,37 @@ struct FsChangePayload {
   size: Option<u64>,
 }
 
+#[derive(Default)]
+struct FolderMeasure {
+  size: u64,
+  file_count: u64,
+  folder_count: u64,
+  unreadable_count: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FolderChildEntry {
+  path: String,
+  name: String,
+  kind: String,
+  size: u64,
+  file_count: u64,
+  folder_count: u64,
+  unreadable_count: u64,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct FolderChildrenResponse {
+  path: String,
+  entries: Vec<FolderChildEntry>,
+  total_bytes: u64,
+  file_count: u64,
+  folder_count: u64,
+  unreadable_count: u64,
+}
+
 impl Default for ScanState {
   fn default() -> Self {
     Self {
@@ -83,6 +115,191 @@ fn path_is_file(path: &Path) -> bool {
     Ok(metadata) => metadata.is_file() && !metadata.file_type().is_symlink(),
     Err(_) => false,
   }
+}
+
+fn display_name(path: &Path) -> String {
+  path
+    .file_name()
+    .map(|name| name.to_string_lossy().to_string())
+    .filter(|name| !name.is_empty())
+    .unwrap_or_else(|| path.to_string_lossy().to_string())
+}
+
+fn measure_directory(path: &Path) -> FolderMeasure {
+  let mut measure = FolderMeasure::default();
+  let mut dirs = VecDeque::from([path.to_path_buf()]);
+
+  while let Some(dir) = dirs.pop_front() {
+    let entries = match fs::read_dir(&dir) {
+      Ok(entries) => entries,
+      Err(_) => {
+        measure.unreadable_count = measure.unreadable_count.saturating_add(1);
+        continue;
+      }
+    };
+
+    for entry in entries {
+      let entry = match entry {
+        Ok(entry) => entry,
+        Err(_) => {
+          measure.unreadable_count = measure.unreadable_count.saturating_add(1);
+          continue;
+        }
+      };
+
+      let file_type = match entry.file_type() {
+        Ok(file_type) => file_type,
+        Err(_) => {
+          measure.unreadable_count = measure.unreadable_count.saturating_add(1);
+          continue;
+        }
+      };
+
+      if file_type.is_symlink() {
+        continue;
+      }
+
+      let entry_path = entry.path();
+      if file_type.is_dir() {
+        measure.folder_count = measure.folder_count.saturating_add(1);
+        dirs.push_back(entry_path);
+        continue;
+      }
+
+      if !file_type.is_file() {
+        continue;
+      }
+
+      let metadata = match entry.metadata() {
+        Ok(metadata) => metadata,
+        Err(_) => {
+          measure.unreadable_count = measure.unreadable_count.saturating_add(1);
+          continue;
+        }
+      };
+
+      measure.file_count = measure.file_count.saturating_add(1);
+      measure.size = measure.size.saturating_add(metadata.len());
+    }
+  }
+
+  measure
+}
+
+fn collect_folder_children(path: PathBuf) -> Result<FolderChildrenResponse, String> {
+  let metadata = fs::symlink_metadata(&path).map_err(|_| "Path not found".to_string())?;
+  if metadata.file_type().is_symlink() {
+    return Err("Symlinks are skipped during folder sizing".to_string());
+  }
+
+  if metadata.is_file() {
+    return Ok(FolderChildrenResponse {
+      path: path.to_string_lossy().to_string(),
+      entries: Vec::new(),
+      total_bytes: metadata.len(),
+      file_count: 1,
+      folder_count: 0,
+      unreadable_count: 0,
+    });
+  }
+
+  if !metadata.is_dir() {
+    return Err("Only folders and regular files can be sized".to_string());
+  }
+
+  let entries = fs::read_dir(&path).map_err(|_| "Unable to read folder".to_string())?;
+  let mut children = Vec::new();
+  let mut total_bytes = 0u64;
+  let mut file_count = 0u64;
+  let mut folder_count = 0u64;
+  let mut unreadable_count = 0u64;
+
+  for entry in entries {
+    let entry = match entry {
+      Ok(entry) => entry,
+      Err(_) => {
+        unreadable_count = unreadable_count.saturating_add(1);
+        continue;
+      }
+    };
+
+    let file_type = match entry.file_type() {
+      Ok(file_type) => file_type,
+      Err(_) => {
+        unreadable_count = unreadable_count.saturating_add(1);
+        continue;
+      }
+    };
+
+    if file_type.is_symlink() {
+      continue;
+    }
+
+    let child_path = entry.path();
+    let child_path_string = child_path.to_string_lossy().to_string();
+    let name = display_name(&child_path);
+
+    if file_type.is_dir() {
+      let measure = measure_directory(&child_path);
+      total_bytes = total_bytes.saturating_add(measure.size);
+      file_count = file_count.saturating_add(measure.file_count);
+      folder_count = folder_count
+        .saturating_add(1)
+        .saturating_add(measure.folder_count);
+      unreadable_count = unreadable_count.saturating_add(measure.unreadable_count);
+      children.push(FolderChildEntry {
+        path: child_path_string,
+        name,
+        kind: "folder".to_string(),
+        size: measure.size,
+        file_count: measure.file_count,
+        folder_count: measure.folder_count,
+        unreadable_count: measure.unreadable_count,
+      });
+      continue;
+    }
+
+    if !file_type.is_file() {
+      continue;
+    }
+
+    let metadata = match entry.metadata() {
+      Ok(metadata) => metadata,
+      Err(_) => {
+        unreadable_count = unreadable_count.saturating_add(1);
+        continue;
+      }
+    };
+    let size = metadata.len();
+
+    total_bytes = total_bytes.saturating_add(size);
+    file_count = file_count.saturating_add(1);
+    children.push(FolderChildEntry {
+      path: child_path_string,
+      name,
+      kind: "file".to_string(),
+      size,
+      file_count: 1,
+      folder_count: 0,
+      unreadable_count: 0,
+    });
+  }
+
+  children.sort_by(|a, b| {
+    b.size
+      .cmp(&a.size)
+      .then_with(|| a.kind.cmp(&b.kind))
+      .then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase()))
+  });
+
+  Ok(FolderChildrenResponse {
+    path: path.to_string_lossy().to_string(),
+    entries: children,
+    total_bytes,
+    file_count,
+    folder_count,
+    unreadable_count,
+  })
 }
 
 fn start_fs_watcher(app: tauri::AppHandle, root: PathBuf, scan_id: u64, watch_generation: u64) {
@@ -293,6 +510,13 @@ fn delete_file(path: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
+async fn folder_children(path: String) -> Result<FolderChildrenResponse, String> {
+  tauri::async_runtime::spawn_blocking(move || collect_folder_children(PathBuf::from(path)))
+    .await
+    .map_err(|_| "Folder sizing task failed".to_string())?
+}
+
+#[tauri::command]
 #[cfg(target_family = "unix")]
 fn disk_overview(root_path: String) -> Result<DiskOverview, String> {
   let root = PathBuf::from(root_path.clone());
@@ -354,6 +578,7 @@ fn main() {
       start_scan,
       cancel_scan,
       delete_file,
+      folder_children,
       disk_overview
     ])
     .run(tauri::generate_context!())
