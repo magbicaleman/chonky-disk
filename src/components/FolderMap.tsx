@@ -266,6 +266,18 @@ export default function FolderMap(props: Props) {
     void loadChildren(path, loadVersion, true);
   };
 
+  const clearCache = async () => {
+    try {
+      await invoke("clear_cache");
+      setStatus("Cleared cached folder index.");
+    } catch (err) {
+      console.error(err);
+      setStatus("Could not clear cache.", "error");
+      return;
+    }
+    refreshRoot();
+  };
+
   createEffect(() => {
     const path = rootPath();
     loadVersion += 1;
@@ -887,14 +899,24 @@ export default function FolderMap(props: Props) {
             <Show when={rootState()?.stale}> / needs refresh</Show>
           </div>
         </div>
-        <button
-          class="button ghost folder-map__refresh"
-          classList={{ "is-loading": !!rootState()?.loading }}
-          onClick={refreshRoot}
-          disabled={!rootPath() || !!rootState()?.loading}
-        >
-          Refresh
-        </button>
+        <div class="folder-map__actions">
+          <button
+            class="button ghost"
+            onClick={clearCache}
+            disabled={!rootPath() || !!rootState()?.loading}
+            title="Delete the on-disk cached folder index and re-measure"
+          >
+            Clear cache
+          </button>
+          <button
+            class="button ghost folder-map__refresh"
+            classList={{ "is-loading": !!rootState()?.loading }}
+            onClick={refreshRoot}
+            disabled={!rootPath() || !!rootState()?.loading}
+          >
+            Refresh
+          </button>
+        </div>
       </div>
 
       <Show

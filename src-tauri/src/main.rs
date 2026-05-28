@@ -4,7 +4,6 @@ mod scanner;
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use scanner::DEFAULT_TOP_N;
 use serde::Serialize;
-use std::collections::VecDeque;
 #[cfg(target_os = "macos")]
 use std::ffi::CStr;
 #[cfg(target_family = "unix")]
@@ -17,7 +16,7 @@ use std::path::Path;
 use std::path::PathBuf;
 use std::ptr;
 use std::sync::{
-  atomic::{AtomicBool, Ordering},
+  atomic::{AtomicBool, AtomicU64, Ordering},
   Arc, Mutex,
 };
 use std::sync::{mpsc, MutexGuard};
@@ -146,67 +145,77 @@ fn display_name(path: &Path) -> String {
     .unwrap_or_else(|| path.to_string_lossy().to_string())
 }
 
+#[derive(Default)]
+struct MeasureAtomics {
+  size: AtomicU64,
+  logical_size: AtomicU64,
+  file_count: AtomicU64,
+  folder_count: AtomicU64,
+  unreadable_count: AtomicU64,
+}
+
 fn measure_directory(path: &Path) -> FolderMeasure {
-  let mut measure = FolderMeasure::default();
-  let mut dirs = VecDeque::from([path.to_path_buf()]);
+  let acc = Arc::new(MeasureAtomics::default());
+  let worker = acc.clone();
 
-  while let Some(dir) = dirs.pop_front() {
-    let entries = match fs::read_dir(&dir) {
-      Ok(entries) => entries,
-      Err(_) => {
-        measure.unreadable_count = measure.unreadable_count.saturating_add(1);
-        continue;
-      }
-    };
-
-    for entry in entries {
-      let entry = match entry {
-        Ok(entry) => entry,
-        Err(_) => {
-          measure.unreadable_count = measure.unreadable_count.saturating_add(1);
+  // jwalk reads each directory on a rayon worker thread, so the per-file
+  // stat() calls (the bottleneck) run in parallel across the subtree.
+  // Sizes/counts are tallied inside `process_read_dir`; directory-open and
+  // entry-read failures surface as Err items in the main iterator and are
+  // counted there to avoid double-counting.
+  let walker = jwalk::WalkDir::new(path)
+    .skip_hidden(false)
+    .follow_links(false)
+    .process_read_dir(move |_depth, _dir_path, _state, children| {
+      for child in children.iter() {
+        let entry = match child {
+          Ok(entry) => entry,
+          Err(_) => continue,
+        };
+        // jwalk invokes this once for the start dir's parent context, where
+        // the root itself appears as a depth-0 child; skip it so the root
+        // isn't counted as one of its own subfolders.
+        if entry.depth() == 0 {
           continue;
         }
-      };
-
-      let file_type = match entry.file_type() {
-        Ok(file_type) => file_type,
-        Err(_) => {
-          measure.unreadable_count = measure.unreadable_count.saturating_add(1);
+        let file_type = entry.file_type();
+        if file_type.is_symlink() {
           continue;
         }
-      };
-
-      if file_type.is_symlink() {
-        continue;
-      }
-
-      let entry_path = entry.path();
-      if file_type.is_dir() {
-        measure.folder_count = measure.folder_count.saturating_add(1);
-        dirs.push_back(entry_path);
-        continue;
-      }
-
-      if !file_type.is_file() {
-        continue;
-      }
-
-      let metadata = match entry.metadata() {
-        Ok(metadata) => metadata,
-        Err(_) => {
-          measure.unreadable_count = measure.unreadable_count.saturating_add(1);
-          continue;
+        if file_type.is_dir() {
+          worker.folder_count.fetch_add(1, Ordering::Relaxed);
+        } else if file_type.is_file() {
+          match entry.metadata() {
+            Ok(metadata) => {
+              worker
+                .size
+                .fetch_add(allocated_size(&metadata), Ordering::Relaxed);
+              worker
+                .logical_size
+                .fetch_add(metadata.len(), Ordering::Relaxed);
+              worker.file_count.fetch_add(1, Ordering::Relaxed);
+            }
+            Err(_) => {
+              worker.unreadable_count.fetch_add(1, Ordering::Relaxed);
+            }
+          }
         }
-      };
+      }
+    });
 
-      let logical_size = metadata.len();
-      measure.file_count = measure.file_count.saturating_add(1);
-      measure.size = measure.size.saturating_add(allocated_size(&metadata));
-      measure.logical_size = measure.logical_size.saturating_add(logical_size);
+  for entry in walker {
+    if entry.is_err() {
+      acc.unreadable_count.fetch_add(1, Ordering::Relaxed);
     }
   }
 
-  measure
+  FolderMeasure {
+    size: acc.size.load(Ordering::Relaxed),
+    logical_size: acc.logical_size.load(Ordering::Relaxed),
+    file_count: acc.file_count.load(Ordering::Relaxed),
+    folder_count: acc.folder_count.load(Ordering::Relaxed),
+    unreadable_count: acc.unreadable_count.load(Ordering::Relaxed),
+  }
 }
 
 fn collect_folder_children(path: PathBuf) -> Result<FolderChildrenResponse, String> {
@@ -557,6 +566,11 @@ fn delete_file(path: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
+fn clear_cache(app: tauri::AppHandle) -> Result<(), String> {
+  cache::clear(&app)
+}
+
+#[tauri::command]
 async fn folder_children(
   path: String,
   force_refresh: Option<bool>,
@@ -641,8 +655,131 @@ fn main() {
       cancel_scan,
       delete_file,
       folder_children,
+      clear_cache,
       disk_overview
     ])
     .run(tauri::generate_context!())
     .expect("error while running tauri application");
+}
+
+#[cfg(all(test, target_family = "unix"))]
+mod measure_tests {
+  use super::{allocated_size, measure_directory, FolderMeasure};
+  use std::collections::VecDeque;
+  use std::fs;
+  use std::path::{Path, PathBuf};
+
+  // Reference serial walk: a faithful copy of the pre-jwalk algorithm,
+  // used purely to assert the parallel impl produces identical counts.
+  fn measure_serial(path: &Path) -> FolderMeasure {
+    let mut measure = FolderMeasure::default();
+    let mut dirs = VecDeque::from([path.to_path_buf()]);
+
+    while let Some(dir) = dirs.pop_front() {
+      let entries = match fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(_) => {
+          measure.unreadable_count += 1;
+          continue;
+        }
+      };
+      for entry in entries {
+        let entry = match entry {
+          Ok(entry) => entry,
+          Err(_) => {
+            measure.unreadable_count += 1;
+            continue;
+          }
+        };
+        let file_type = match entry.file_type() {
+          Ok(file_type) => file_type,
+          Err(_) => {
+            measure.unreadable_count += 1;
+            continue;
+          }
+        };
+        if file_type.is_symlink() {
+          continue;
+        }
+        if file_type.is_dir() {
+          measure.folder_count += 1;
+          dirs.push_back(entry.path());
+          continue;
+        }
+        if !file_type.is_file() {
+          continue;
+        }
+        match entry.metadata() {
+          Ok(metadata) => {
+            measure.file_count += 1;
+            measure.size += allocated_size(&metadata);
+            measure.logical_size += metadata.len();
+          }
+          Err(_) => measure.unreadable_count += 1,
+        }
+      }
+    }
+    measure
+  }
+
+  fn assert_match(path: &Path) {
+    let parallel = measure_directory(path);
+    let serial = measure_serial(path);
+    assert_eq!(parallel.size, serial.size, "size mismatch at {path:?}");
+    assert_eq!(
+      parallel.logical_size, serial.logical_size,
+      "logical_size mismatch at {path:?}"
+    );
+    assert_eq!(
+      parallel.file_count, serial.file_count,
+      "file_count mismatch at {path:?}"
+    );
+    assert_eq!(
+      parallel.folder_count, serial.folder_count,
+      "folder_count mismatch at {path:?}"
+    );
+    assert_eq!(
+      parallel.unreadable_count, serial.unreadable_count,
+      "unreadable_count mismatch at {path:?}"
+    );
+  }
+
+  #[test]
+  fn matches_reference_on_synthetic_tree() {
+    let root = std::env::temp_dir().join(format!("chonky-test-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(root.join("a/b/c")).unwrap();
+    fs::create_dir_all(root.join("a/empty")).unwrap();
+    fs::create_dir_all(root.join("d")).unwrap();
+    fs::write(root.join("top.bin"), vec![0u8; 4096]).unwrap();
+    fs::write(root.join("a/one.bin"), vec![1u8; 100]).unwrap();
+    fs::write(root.join("a/b/two.bin"), vec![2u8; 8192]).unwrap();
+    fs::write(root.join("a/b/c/three.bin"), vec![3u8; 1]).unwrap();
+    fs::write(root.join("d/four.bin"), vec![4u8; 50000]).unwrap();
+    std::os::unix::fs::symlink(root.join("top.bin"), root.join("link.bin")).unwrap();
+    std::os::unix::fs::symlink(root.join("a"), root.join("a-link")).unwrap();
+
+    assert_match(&root);
+
+    let result = measure_directory(&root);
+    assert_eq!(result.file_count, 5, "expected 5 real files");
+    assert_eq!(result.folder_count, 5, "expected 5 real subdirs");
+
+    fs::remove_dir_all(&root).unwrap();
+  }
+
+  // Opt-in check against a real folder: CHONKY_TEST_DIR=/some/path cargo test -- --nocapture
+  #[test]
+  fn matches_reference_on_real_dir() {
+    let Ok(dir) = std::env::var("CHONKY_TEST_DIR") else {
+      return;
+    };
+    let path = PathBuf::from(dir);
+    assert_match(&path);
+    let m = measure_directory(&path);
+    println!(
+      "measure({path:?}) -> disk={} bytes, logical={} bytes, files={}, folders={}, unreadable={}",
+      m.size, m.logical_size, m.file_count, m.folder_count, m.unreadable_count
+    );
+  }
 }

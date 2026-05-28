@@ -11,6 +11,7 @@ build = "build.rs"
 tauri-build = { version = "1.5", features = [] }
 
 [dependencies]
+jwalk = "0.8"
 libc = "0.2"
 notify = "6.1.1"
 rusqlite = { version = "0.31", features = ["bundled"] }

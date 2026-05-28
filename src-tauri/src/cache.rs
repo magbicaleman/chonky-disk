@@ -1,10 +1,37 @@
 use rusqlite::{params, Connection};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::{FolderChildEntry, FolderChildrenResponse};
 
 const DB_FILE_NAME: &str = "folder-cache.sqlite3";
+
+// WAL mode leaves these plaintext sidecar files next to the DB.
+const SIDECAR_SUFFIXES: [&str; 2] = ["-wal", "-shm"];
+
+#[cfg(target_family = "unix")]
+fn restrict_permissions(path: &Path, mode: u32) {
+  use std::os::unix::fs::PermissionsExt;
+  if let Ok(metadata) = std::fs::metadata(path) {
+    let mut perms = metadata.permissions();
+    perms.set_mode(mode);
+    let _ = std::fs::set_permissions(path, perms);
+  }
+}
+
+#[cfg(not(target_family = "unix"))]
+fn restrict_permissions(_path: &Path, _mode: u32) {}
+
+fn sidecar_paths(db_path: &Path) -> Vec<PathBuf> {
+  SIDECAR_SUFFIXES
+    .iter()
+    .map(|suffix| {
+      let mut name = db_path.as_os_str().to_os_string();
+      name.push(suffix);
+      PathBuf::from(name)
+    })
+    .collect()
+}
 
 fn now_unix_seconds() -> i64 {
   SystemTime::now()
@@ -19,11 +46,13 @@ fn cache_path(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     .app_data_dir()
     .ok_or_else(|| "Unable to resolve app data directory".to_string())?;
   std::fs::create_dir_all(&dir).map_err(|_| "Unable to create cache directory".to_string())?;
+  restrict_permissions(&dir, 0o700);
   Ok(dir.join(DB_FILE_NAME))
 }
 
 fn open(app: &tauri::AppHandle) -> Result<Connection, String> {
-  let connection = Connection::open(cache_path(app)?)
+  let db_path = cache_path(app)?;
+  let connection = Connection::open(&db_path)
     .map_err(|err| format!("Unable to open folder cache: {err}"))?;
   connection
     .execute_batch(
@@ -59,7 +88,28 @@ fn open(app: &tauri::AppHandle) -> Result<Connection, String> {
       ",
     )
     .map_err(|err| format!("Unable to initialize folder cache: {err}"))?;
+
+  restrict_permissions(&db_path, 0o600);
+  for sidecar in sidecar_paths(&db_path) {
+    restrict_permissions(&sidecar, 0o600);
+  }
+
   Ok(connection)
+}
+
+pub fn clear(app: &tauri::AppHandle) -> Result<(), String> {
+  let db_path = cache_path(app)?;
+  let mut targets = vec![db_path.clone()];
+  targets.extend(sidecar_paths(&db_path));
+
+  for target in targets {
+    match std::fs::remove_file(&target) {
+      Ok(()) => {}
+      Err(err) if err.kind() == std::io::ErrorKind::NotFound => {}
+      Err(err) => return Err(format!("Unable to clear folder cache: {err}")),
+    }
+  }
+  Ok(())
 }
 
 pub fn load_folder(

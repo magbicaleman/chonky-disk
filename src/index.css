@@ -454,6 +454,17 @@ body {
   font-size: 18px;
 }
 
+.folder-map__actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.folder-map__actions .button {
+  padding: 6px 12px;
+  font-size: 12px;
+}
+
 .folder-map__refresh {
   padding: 6px 12px;
   font-size: 12px;
