@@ -91,6 +91,26 @@ export default function TopFiles(props: Props) {
     return props.files.filter((file) => !hidden.has(file.path));
   });
 
+  const logicalSizeHint = (file: FileEntry) => {
+    if (!Number.isFinite(file.logicalSize) || file.logicalSize <= file.size) {
+      return null;
+    }
+    return `Logical capacity: ${formatBytes(file.logicalSize)}`;
+  };
+
+  const sizeTooltip = (file: FileEntry) => {
+    if (Number.isFinite(file.logicalSize) && file.logicalSize > file.size) {
+      return `Disk used is what macOS is actually storing and what affects free space: ${formatBytes(
+        file.size
+      )}. Logical capacity is the apparent reserved size: ${formatBytes(
+        file.logicalSize
+      )}. Sparse files can look large without currently using that much disk.`;
+    }
+    return `Disk used is what macOS is actually storing and what affects free space: ${formatBytes(
+      file.size
+    )}.`;
+  };
+
   createEffect(() => {
     props.scanKey;
     setHiddenPaths(new Set<string>());
@@ -274,11 +294,28 @@ export default function TopFiles(props: Props) {
                 }}
               >
                 <div class="file-row__main">
-                  <span class="file-size">{formatBytes(file().size)}</span>
+                  <span class="file-size">
+                    <span class="file-size__label">
+                      Disk used
+                      <button
+                        class="metric-info"
+                        type="button"
+                        aria-label="What disk used means"
+                        data-tooltip={sizeTooltip(file())}
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        i
+                      </button>
+                    </span>
+                    {formatBytes(file().size)}
+                  </span>
                   <div class="file-row__text">
                     <span class="file-path" title={file().path}>
                       {file().path}
                     </span>
+                    <Show when={logicalSizeHint(file())}>
+                      {(hint) => <span class="file-app">{hint()}</span>}
+                    </Show>
                     <Show when={appHintForPath(file().path)}>
                       {(hint) => <span class="file-app">{hint()}</span>}
                     </Show>
@@ -287,6 +324,12 @@ export default function TopFiles(props: Props) {
                 <Show when={selectedPath() === file().path}>
                   <div class="file-row__details">
                     <div class="file-row__path">{file().path}</div>
+                    <div class="file-row__path file-row__path--metric">
+                      Disk used: {formatBytes(file().size)}
+                    </div>
+                    <Show when={logicalSizeHint(file())}>
+                      {(hint) => <div class="file-row__path">{hint()}</div>}
+                    </Show>
                     <div class="file-actions">
                       <button
                         class="action-button"

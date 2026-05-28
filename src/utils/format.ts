@@ -4,7 +4,7 @@ export function formatBytes(bytes: number): string {
   }
 
   const units = ["B", "KB", "MB", "GB", "TB"];
-  const base = 1024;
+  const base = 1000;
   const exponent = Math.min(
     Math.floor(Math.log(bytes) / Math.log(base)),
     units.length - 1
@@ -14,6 +14,22 @@ export function formatBytes(bytes: number): string {
   return `${value.toFixed(value >= 100 ? 0 : value >= 10 ? 1 : 2)} ${
     units[exponent]
   }`;
+}
+
+export function formatStorageBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 B";
+  }
+
+  const units = ["B", "KB", "MB", "GB", "TB"];
+  const base = 1000;
+  const exponent = Math.min(
+    Math.floor(Math.log(bytes) / Math.log(base)),
+    units.length - 1
+  );
+  const value = bytes / Math.pow(base, exponent);
+
+  return `${value.toFixed(exponent === 0 ? 0 : 1)} ${units[exponent]}`;
 }
 
 export function formatDuration(ms: number): string {

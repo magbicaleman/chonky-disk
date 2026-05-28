@@ -2,6 +2,8 @@ use serde::Serialize;
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, VecDeque};
 use std::fs;
+#[cfg(target_family = "unix")]
+use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use std::sync::{
   atomic::{AtomicBool, Ordering},
@@ -13,12 +15,14 @@ use tauri::{AppHandle, Manager};
 const EMIT_INTERVAL: Duration = Duration::from_millis(200);
 pub const DEFAULT_TOP_N: usize = 50;
 
-type HeapEntry = (u64, String);
+type HeapEntry = (u64, u64, String);
 
 #[derive(Clone, Serialize)]
 pub struct FileEntry {
   pub path: String,
   pub size: u64,
+  #[serde(rename = "logicalSize")]
+  pub logical_size: u64,
 }
 
 #[derive(Clone, Serialize)]
@@ -29,6 +33,8 @@ pub struct ProgressPayload {
   pub scanned_files: u64,
   #[serde(rename = "scannedBytes")]
   pub scanned_bytes: u64,
+  #[serde(rename = "scannedLogicalBytes")]
+  pub scanned_logical_bytes: u64,
   #[serde(rename = "currentPath")]
   pub current_path: String,
   #[serde(rename = "topFiles")]
@@ -46,22 +52,26 @@ pub fn scan_directory(
   let mut heap: BinaryHeap<Reverse<HeapEntry>> = BinaryHeap::new();
   let mut scanned_files = 0u64;
   let mut scanned_bytes = 0u64;
+  let mut scanned_logical_bytes = 0u64;
   let mut current_path = String::new();
   let mut last_emit = Instant::now() - EMIT_INTERVAL;
   let mut cancelled = false;
 
   if let Ok(metadata) = fs::metadata(&root) {
     if metadata.is_file() {
-      let size = metadata.len();
+      let logical_size = metadata.len();
+      let size = allocated_size(&metadata);
       let path_string = root.to_string_lossy().to_string();
       scanned_files = 1;
       scanned_bytes = size;
+      scanned_logical_bytes = logical_size;
       current_path = path_string.clone();
-      push_top(&mut heap, (size, path_string), top_n);
+      push_top(&mut heap, (size, logical_size, path_string), top_n);
       emit_progress(
         &app,
         scanned_files,
         scanned_bytes,
+        scanned_logical_bytes,
         &current_path,
         &heap,
         scan_id,
@@ -71,6 +81,7 @@ pub fn scan_directory(
         &app,
         scanned_files,
         scanned_bytes,
+        scanned_logical_bytes,
         &current_path,
         &heap,
         scan_id,
@@ -131,16 +142,19 @@ pub fn scan_directory(
         Err(_) => continue,
       };
 
-      let size = metadata.len();
+      let logical_size = metadata.len();
+      let size = allocated_size(&metadata);
       scanned_files += 1;
       scanned_bytes += size;
-      push_top(&mut heap, (size, path_string), top_n);
+      scanned_logical_bytes += logical_size;
+      push_top(&mut heap, (size, logical_size, path_string), top_n);
 
       if last_emit.elapsed() >= EMIT_INTERVAL {
         emit_progress(
           &app,
           scanned_files,
           scanned_bytes,
+          scanned_logical_bytes,
           &current_path,
           &heap,
           scan_id,
@@ -155,6 +169,7 @@ pub fn scan_directory(
     &app,
     scanned_files,
     scanned_bytes,
+    scanned_logical_bytes,
     &current_path,
     &heap,
     scan_id,
@@ -162,6 +177,17 @@ pub fn scan_directory(
   );
 
   cancelled
+}
+
+fn allocated_size(metadata: &fs::Metadata) -> u64 {
+  #[cfg(target_family = "unix")]
+  {
+    metadata.blocks().saturating_mul(512)
+  }
+  #[cfg(not(target_family = "unix"))]
+  {
+    metadata.len()
+  }
 }
 
 fn push_top(heap: &mut BinaryHeap<Reverse<HeapEntry>>, entry: HeapEntry, limit: usize) {
@@ -175,6 +201,7 @@ fn emit_progress(
   app: &AppHandle,
   scanned_files: u64,
   scanned_bytes: u64,
+  scanned_logical_bytes: u64,
   current_path: &str,
   heap: &BinaryHeap<Reverse<HeapEntry>>,
   scan_id: u64,
@@ -183,10 +210,11 @@ fn emit_progress(
   let mut top_files: Vec<FileEntry> = heap
     .iter()
     .map(|entry| {
-      let (size, path) = &entry.0;
+      let (size, logical_size, path) = &entry.0;
       FileEntry {
         path: path.clone(),
         size: *size,
+        logical_size: *logical_size,
       }
     })
     .collect();
@@ -197,6 +225,7 @@ fn emit_progress(
     scan_id,
     scanned_files,
     scanned_bytes,
+    scanned_logical_bytes,
     current_path: current_path.to_string(),
     top_files,
   };

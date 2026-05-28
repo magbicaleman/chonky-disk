@@ -1,3 +1,4 @@
+mod cache;
 mod scanner;
 
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
@@ -10,6 +11,8 @@ use std::ffi::CStr;
 use std::ffi::CString;
 #[cfg(target_family = "unix")]
 use std::os::unix::ffi::OsStrExt;
+#[cfg(target_family = "unix")]
+use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::path::PathBuf;
 use std::ptr;
@@ -53,37 +56,44 @@ struct FsChangePayload {
   path: String,
   kind: String,
   size: Option<u64>,
+  #[serde(rename = "logicalSize")]
+  logical_size: Option<u64>,
 }
 
 #[derive(Default)]
 struct FolderMeasure {
   size: u64,
+  logical_size: u64,
   file_count: u64,
   folder_count: u64,
   unreadable_count: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FolderChildEntry {
   path: String,
   name: String,
   kind: String,
   size: u64,
+  logical_size: u64,
   file_count: u64,
   folder_count: u64,
   unreadable_count: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct FolderChildrenResponse {
   path: String,
   entries: Vec<FolderChildEntry>,
   total_bytes: u64,
+  total_logical_bytes: u64,
   file_count: u64,
   folder_count: u64,
   unreadable_count: u64,
+  from_cache: bool,
+  stale: bool,
 }
 
 impl Default for ScanState {
@@ -114,6 +124,17 @@ fn path_is_file(path: &Path) -> bool {
   match fs::symlink_metadata(path) {
     Ok(metadata) => metadata.is_file() && !metadata.file_type().is_symlink(),
     Err(_) => false,
+  }
+}
+
+fn allocated_size(metadata: &fs::Metadata) -> u64 {
+  #[cfg(target_family = "unix")]
+  {
+    metadata.blocks().saturating_mul(512)
+  }
+  #[cfg(not(target_family = "unix"))]
+  {
+    metadata.len()
   }
 }
 
@@ -178,8 +199,10 @@ fn measure_directory(path: &Path) -> FolderMeasure {
         }
       };
 
+      let logical_size = metadata.len();
       measure.file_count = measure.file_count.saturating_add(1);
-      measure.size = measure.size.saturating_add(metadata.len());
+      measure.size = measure.size.saturating_add(allocated_size(&metadata));
+      measure.logical_size = measure.logical_size.saturating_add(logical_size);
     }
   }
 
@@ -196,10 +219,13 @@ fn collect_folder_children(path: PathBuf) -> Result<FolderChildrenResponse, Stri
     return Ok(FolderChildrenResponse {
       path: path.to_string_lossy().to_string(),
       entries: Vec::new(),
-      total_bytes: metadata.len(),
+      total_bytes: allocated_size(&metadata),
+      total_logical_bytes: metadata.len(),
       file_count: 1,
       folder_count: 0,
       unreadable_count: 0,
+      from_cache: false,
+      stale: false,
     });
   }
 
@@ -210,6 +236,7 @@ fn collect_folder_children(path: PathBuf) -> Result<FolderChildrenResponse, Stri
   let entries = fs::read_dir(&path).map_err(|_| "Unable to read folder".to_string())?;
   let mut children = Vec::new();
   let mut total_bytes = 0u64;
+  let mut total_logical_bytes = 0u64;
   let mut file_count = 0u64;
   let mut folder_count = 0u64;
   let mut unreadable_count = 0u64;
@@ -242,6 +269,7 @@ fn collect_folder_children(path: PathBuf) -> Result<FolderChildrenResponse, Stri
     if file_type.is_dir() {
       let measure = measure_directory(&child_path);
       total_bytes = total_bytes.saturating_add(measure.size);
+      total_logical_bytes = total_logical_bytes.saturating_add(measure.logical_size);
       file_count = file_count.saturating_add(measure.file_count);
       folder_count = folder_count
         .saturating_add(1)
@@ -252,6 +280,7 @@ fn collect_folder_children(path: PathBuf) -> Result<FolderChildrenResponse, Stri
         name,
         kind: "folder".to_string(),
         size: measure.size,
+        logical_size: measure.logical_size,
         file_count: measure.file_count,
         folder_count: measure.folder_count,
         unreadable_count: measure.unreadable_count,
@@ -270,15 +299,18 @@ fn collect_folder_children(path: PathBuf) -> Result<FolderChildrenResponse, Stri
         continue;
       }
     };
-    let size = metadata.len();
+    let size = allocated_size(&metadata);
+    let logical_size = metadata.len();
 
     total_bytes = total_bytes.saturating_add(size);
+    total_logical_bytes = total_logical_bytes.saturating_add(logical_size);
     file_count = file_count.saturating_add(1);
     children.push(FolderChildEntry {
       path: child_path_string,
       name,
       kind: "file".to_string(),
       size,
+      logical_size,
       file_count: 1,
       folder_count: 0,
       unreadable_count: 0,
@@ -296,10 +328,20 @@ fn collect_folder_children(path: PathBuf) -> Result<FolderChildrenResponse, Stri
     path: path.to_string_lossy().to_string(),
     entries: children,
     total_bytes,
+    total_logical_bytes,
     file_count,
     folder_count,
     unreadable_count,
+    from_cache: false,
+    stale: false,
   })
+}
+
+fn refresh_folder_cache(app: tauri::AppHandle, path: String) -> Result<FolderChildrenResponse, String> {
+  let response = collect_folder_children(PathBuf::from(&path))?;
+  cache::save_folder(&app, &response)?;
+  let _ = app.emit_to("main", "folder_children_updated", response.clone());
+  Ok(response)
 }
 
 fn start_fs_watcher(app: tauri::AppHandle, root: PathBuf, scan_id: u64, watch_generation: u64) {
@@ -335,15 +377,19 @@ fn start_fs_watcher(app: tauri::AppHandle, root: PathBuf, scan_id: u64, watch_ge
 
       for path in event.paths {
         let path_string = path.to_string_lossy().to_string();
-        let (event_kind, size) = if kind == "remove" {
-          ("remove", None)
+        let (event_kind, size, logical_size) = if kind == "remove" {
+          ("remove", None, None)
         } else if !path.exists() {
-          ("remove", None)
+          ("remove", None, None)
         } else if path_is_file(&path) {
-          (
-            kind,
-            fs::metadata(&path).ok().map(|metadata| metadata.len()),
-          )
+          match fs::metadata(&path) {
+            Ok(metadata) => (
+              kind,
+              Some(allocated_size(&metadata)),
+              Some(metadata.len()),
+            ),
+            Err(_) => (kind, None, None),
+          }
         } else {
           continue;
         };
@@ -353,6 +399,7 @@ fn start_fs_watcher(app: tauri::AppHandle, root: PathBuf, scan_id: u64, watch_ge
           path: path_string,
           kind: event_kind.to_string(),
           size,
+          logical_size,
         };
 
         let _ = app.emit_to("main", "scan_fs_change", payload);
@@ -510,8 +557,23 @@ fn delete_file(path: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
-async fn folder_children(path: String) -> Result<FolderChildrenResponse, String> {
-  tauri::async_runtime::spawn_blocking(move || collect_folder_children(PathBuf::from(path)))
+async fn folder_children(
+  path: String,
+  force_refresh: Option<bool>,
+  app: tauri::AppHandle,
+) -> Result<FolderChildrenResponse, String> {
+  if force_refresh != Some(true) {
+    if let Some(cached) = cache::load_folder(&app, &path)? {
+      let refresh_app = app.clone();
+      let refresh_path = path.clone();
+      tauri::async_runtime::spawn_blocking(move || {
+        let _ = refresh_folder_cache(refresh_app, refresh_path);
+      });
+      return Ok(cached);
+    }
+  }
+
+  tauri::async_runtime::spawn_blocking(move || refresh_folder_cache(app, path))
     .await
     .map_err(|_| "Folder sizing task failed".to_string())?
 }

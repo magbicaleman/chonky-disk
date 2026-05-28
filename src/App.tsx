@@ -14,7 +14,7 @@ import { invoke } from "@tauri-apps/api/tauri";
 import FolderMap from "./components/FolderMap";
 import TopFiles from "./components/TopFiles";
 import { scanState, setScanState, type ScanProgress } from "./stores/scan";
-import { formatBytes, formatDuration } from "./utils/format";
+import { formatBytes, formatDuration, formatStorageBytes } from "./utils/format";
 
 type ScanHistoryEntry = {
   id: number;
@@ -40,6 +40,7 @@ type FsChangePayload = {
   path: string;
   kind: "create" | "modify" | "remove";
   size?: number | null;
+  logicalSize?: number | null;
 };
 
 type LogEntry = {
@@ -53,6 +54,10 @@ type ResultsView = "files" | "folders";
 const HISTORY_STORAGE_KEY = "chonky.scanHistory.v1";
 const TOP_FILES_LIMIT = 50;
 const DISK_REFRESH_THROTTLE_MS = 8000;
+const STORAGE_FREE_HELP =
+  "Free now is raw APFS space available immediately. macOS Settings may show a higher Available number because it can include purgeable or reclaimable space.";
+const STORAGE_USED_HELP =
+  "Used is total capacity minus raw APFS free space. macOS Settings can show slightly less used space when it counts purgeable data as available.";
 
 export default function App() {
   const [folder, setFolder] = createSignal("");
@@ -75,6 +80,8 @@ export default function App() {
   const [activityLog, setActivityLog] = createSignal<LogEntry[]>([]);
   const [error, setError] = createSignal<string | null>(null);
   const [resultsView, setResultsView] = createSignal<ResultsView>("files");
+  const [folderFsChange, setFolderFsChange] =
+    createSignal<FsChangePayload | null>(null);
 
   let unlistenProgress: (() => void) | undefined;
   let unlistenComplete: (() => void) | undefined;
@@ -216,6 +223,8 @@ export default function App() {
           return;
         }
 
+        setFolderFsChange({ ...event.payload });
+
         setScanState("topFiles", (files) => {
           let next = files.slice();
           const { path, kind, size } = event.payload;
@@ -234,13 +243,22 @@ export default function App() {
 
           const existingIndex = next.findIndex((file) => file.path === path);
           if (existingIndex >= 0) {
-            next[existingIndex] = { path, size: size as number };
+            next[existingIndex] = {
+              path,
+              size: size as number,
+              logicalSize:
+                event.payload.logicalSize ?? next[existingIndex].logicalSize,
+            };
           } else {
             const smallest = next[next.length - 1]?.size ?? 0;
             if (next.length >= TOP_FILES_LIMIT && (size as number) <= smallest) {
               return files;
             }
-            next.push({ path, size: size as number });
+            next.push({
+              path,
+              size: size as number,
+              logicalSize: event.payload.logicalSize ?? (size as number),
+            });
           }
 
           next.sort((a, b) => b.size - a.size);
@@ -549,21 +567,43 @@ export default function App() {
               Refresh
             </button>
             <div class="storage__stat">
-              <div class="stat__label">Used</div>
+              <div class="stat__label">
+                Used
+                <button
+                  class="metric-info"
+                  type="button"
+                  aria-label="Why used can differ from macOS Settings"
+                  data-tooltip={STORAGE_USED_HELP}
+                >
+                  i
+                </button>
+              </div>
               <div class="storage__value">
-                {diskInfo() ? formatBytes(diskInfo()!.usedBytes) : "—"}
+                {diskInfo() ? formatStorageBytes(diskInfo()!.usedBytes) : "—"}
               </div>
             </div>
             <div class="storage__stat">
-              <div class="stat__label">Free</div>
+              <div class="stat__label">
+                Free now
+                <button
+                  class="metric-info"
+                  type="button"
+                  aria-label="Why free space can differ from macOS Settings"
+                  data-tooltip={STORAGE_FREE_HELP}
+                >
+                  i
+                </button>
+              </div>
               <div class="storage__value">
-                {diskInfo() ? formatBytes(diskInfo()!.availableBytes) : "—"}
+                {diskInfo()
+                  ? formatStorageBytes(diskInfo()!.availableBytes)
+                  : "—"}
               </div>
             </div>
             <div class="storage__stat">
               <div class="stat__label">Total</div>
               <div class="storage__value">
-                {diskInfo() ? formatBytes(diskInfo()!.totalBytes) : "—"}
+                {diskInfo() ? formatStorageBytes(diskInfo()!.totalBytes) : "—"}
               </div>
             </div>
           </div>
@@ -576,9 +616,11 @@ export default function App() {
         </div>
         <div class="storage__legend">
           {diskInfo()
-            ? `${formatBytes(diskInfo()!.usedBytes)} used of ${formatBytes(
+            ? `${formatStorageBytes(
+                diskInfo()!.usedBytes
+              )} used of ${formatStorageBytes(
                 diskInfo()!.totalBytes
-              )} • ${formatBytes(diskInfo()!.availableBytes)} free`
+              )} • ${formatStorageBytes(diskInfo()!.availableBytes)} free`
             : "Awaiting folder selection"}
         </div>
       </section>
@@ -637,7 +679,7 @@ export default function App() {
                 </div>
               </div>
               <div>
-                <div class="stat__label">Bytes scanned</div>
+                <div class="stat__label">Disk used scanned</div>
                 <div class="stat__value">
                   {formatBytes(scanState.scannedBytes)}
                 </div>
@@ -716,16 +758,16 @@ export default function App() {
               Folders
             </button>
           </div>
-          <Show
-            when={resultsView() === "files"}
-            fallback={<FolderMap rootPath={folder()} />}
-          >
+          <div class="results-view" hidden={resultsView() !== "files"}>
             <TopFiles
               files={scanState.topFiles}
               scanKey={scanKey()}
               onStorageRefresh={requestDiskRefresh}
             />
-          </Show>
+          </div>
+          <div class="results-view" hidden={resultsView() !== "folders"}>
+            <FolderMap rootPath={folder()} fsChange={folderFsChange()} />
+          </div>
         </div>
       </section>
 
