@@ -197,10 +197,18 @@ body {
   cursor: pointer;
   color: var(--text);
   font-size: 14px;
+  display: grid;
+  place-items: center;
 }
 
 .toggle:hover {
   border-color: var(--border-strong);
+}
+
+.toggle.is-active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
 }
 
 .btn {
@@ -1284,6 +1292,23 @@ body {
   height: 3px;
   border-radius: 50%;
   background: var(--border-strong);
+  flex: 0 0 auto;
+}
+
+.privacy-indicator {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--accent);
+  font-weight: 600;
+  flex: 0 0 auto;
+}
+
+.privacy-indicator__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--accent);
   flex: 0 0 auto;
 }
 

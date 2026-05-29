@@ -14,6 +14,13 @@ import { invoke } from "@tauri-apps/api/tauri";
 import FolderMap from "./components/FolderMap";
 import TopFiles from "./components/TopFiles";
 import { scanState, setScanState, type ScanProgress } from "./stores/scan";
+import {
+  privacyMode,
+  redactPath,
+  redactVolume,
+  setPrivacyHome,
+  togglePrivacyMode,
+} from "./stores/privacy";
 import { formatBytes, formatDuration, formatStorageBytes } from "./utils/format";
 
 type ScanHistoryEntry = {
@@ -60,6 +67,40 @@ const STORAGE_FREE_HELP =
   "Free now is raw APFS space available immediately. macOS Settings may show a higher Available number because it can include purgeable or reclaimable space.";
 const STORAGE_USED_HELP =
   "Used is total capacity minus raw APFS free space. macOS Settings can show slightly less used space when it counts purgeable data as available.";
+
+const EyeIcon = () => (
+  <svg
+    width="15"
+    height="15"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+    <circle cx="12" cy="12" r="3" />
+  </svg>
+);
+
+const EyeOffIcon = () => (
+  <svg
+    width="15"
+    height="15"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24" />
+    <line x1="1" y1="1" x2="23" y2="23" />
+  </svg>
+);
 
 export default function App() {
   const [folder, setFolder] = createSignal("");
@@ -137,6 +178,7 @@ export default function App() {
     try {
       const home = await homeDir();
       setHomePath(home);
+      setPrivacyHome(home);
       if (!folder()) {
         setFolder(home);
       }
@@ -534,7 +576,9 @@ export default function App() {
     if (!path) {
       return [] as string[];
     }
-    return path.split("/").filter(Boolean);
+    // redactPath collapses the home dir to "~" when Privacy Mode is on, so the
+    // breadcrumb shows "~ › dev › …" instead of leaking the username.
+    return redactPath(path).split("/").filter(Boolean);
   });
 
   const folderName = createMemo(() => {
@@ -619,6 +663,18 @@ export default function App() {
         </Show>
         <button
           class="toggle"
+          classList={{ "is-active": privacyMode() }}
+          title="Privacy mode (hide paths & names)"
+          aria-label="Privacy mode (hide paths and names)"
+          aria-pressed={privacyMode()}
+          onClick={togglePrivacyMode}
+        >
+          <Show when={privacyMode()} fallback={<EyeIcon />}>
+            <EyeOffIcon />
+          </Show>
+        </button>
+        <button
+          class="toggle"
           title="Toggle light / dark"
           aria-label="Toggle light or dark theme"
           onClick={toggleTheme}
@@ -695,7 +751,7 @@ export default function App() {
             <div class="capbar">
               <i style={{ width: `${usedPercent()}%` }} />
             </div>
-            <div class="capnote" title={volumeDisplayName()}>
+            <div class="capnote" title={redactVolume(volumeDisplayName())}>
               {capacityNote()}
             </div>
             <Show when={diskError()}>
@@ -716,12 +772,12 @@ export default function App() {
               </h1>
               <div class="sub">
                 {mode() === "explore"
-                  ? folder() || "Choose a folder to explore"
+                  ? redactPath(folder()) || "Choose a folder to explore"
                   : scanState.scannedFiles > 0
                   ? `${scanState.scannedFiles.toLocaleString()} files · ${formatBytes(
                       scanState.scannedBytes
-                    )} scanned in ${folder()}`
-                  : `Scan ${folder() || "a folder"} to find space hogs`}
+                    )} scanned in ${redactPath(folder())}`
+                  : `Scan ${redactPath(folder()) || "a folder"} to find space hogs`}
               </div>
             </div>
             <div
@@ -777,7 +833,10 @@ export default function App() {
                 </div>
               </div>
               <div class="scanbar__path">
-                <b>{scanState.currentPath || "Idle — press Scan to begin."}</b>
+                <b>
+                  {redactPath(scanState.currentPath) ||
+                    "Idle — press Scan to begin."}
+                </b>
               </div>
             </div>
 
@@ -804,8 +863,11 @@ export default function App() {
                       {(entry) => (
                         <li class="history-row">
                           <div>
-                            <div class="history-path" title={entry.rootPath}>
-                              {entry.rootPath}
+                            <div
+                              class="history-path"
+                              title={redactPath(entry.rootPath)}
+                            >
+                              {redactPath(entry.rootPath)}
                             </div>
                             <div class="history-meta">
                               {formatDuration(entry.durationMs)} ·{" "}
@@ -877,9 +939,21 @@ export default function App() {
             </>
           )}
         </Show>
+        <Show when={privacyMode()}>
+          <span class="dotdiv" />
+          <span
+            class="seg privacy-indicator"
+            title="Privacy mode is on — paths & names are hidden"
+          >
+            <span class="privacy-indicator__dot" aria-hidden="true" />
+            Privacy mode on
+          </span>
+        </Show>
         <div class="spacer" />
         <span class="seg">
-          {diskLoading() ? "Updating disk usage…" : volumeDisplayName()}
+          {diskLoading()
+            ? "Updating disk usage…"
+            : redactVolume(volumeDisplayName())}
         </span>
       </div>
     </div>

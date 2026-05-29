@@ -13,6 +13,7 @@ import { writeText } from "@tauri-apps/api/clipboard";
 import { dirname } from "@tauri-apps/api/path";
 import { open as openPath } from "@tauri-apps/api/shell";
 import { invoke } from "@tauri-apps/api/tauri";
+import { redactName, redactPath } from "../stores/privacy";
 import { formatBytes } from "../utils/format";
 
 type FolderEntryKind = "folder" | "file";
@@ -615,9 +616,10 @@ export default function FolderMap(props: Props) {
     return (
       <ul class="folder-tree__group">
         <For each={nodeProps.entries}>
-          {(entry) => (
+          {(entry, index) => (
             <FolderNode
               entry={entry}
+              index={index()}
               depth={nodeProps.depth}
               parentSize={nodeProps.parentSize}
             />
@@ -629,6 +631,7 @@ export default function FolderMap(props: Props) {
 
   function FolderNode(nodeProps: {
     entry: FolderEntry;
+    index: number;
     depth: number;
     parentSize: number;
   }) {
@@ -700,8 +703,8 @@ export default function FolderMap(props: Props) {
               aria-hidden="true"
             />
             <div class="folder-row__identity">
-              <div class="folder-row__name" title={entry.path}>
-                {entry.name}
+              <div class="folder-row__name" title={redactPath(entry.path)}>
+                {redactName(entry.name, nodeProps.index, entry.kind)}
               </div>
               <div class="folder-row__meta">{metaText(entry)}</div>
             </div>
@@ -793,7 +796,7 @@ export default function FolderMap(props: Props) {
           </div>
           <Show when={selectedPath() === entry.path}>
             <div class="folder-row__details">
-              <div class="file-row__path">{entry.path}</div>
+              <div class="file-row__path">{redactPath(entry.path)}</div>
               <div class="file-row__path file-row__path--metric">
                 Disk used: {formatBytes(entry.size)}
               </div>
@@ -893,7 +896,7 @@ export default function FolderMap(props: Props) {
   return (
     <div class="card folder-map">
       <div class="card__header">
-        <div class="hint" title={rootPath()}>
+        <div class="hint" title={redactPath(rootPath())}>
           <Show when={rootState()?.stale} fallback={"Sorted by disk used"}>
             Needs refresh — values may be stale
           </Show>
