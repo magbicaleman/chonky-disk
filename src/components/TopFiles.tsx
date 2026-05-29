@@ -5,6 +5,7 @@ import { dirname } from "@tauri-apps/api/path";
 import { open as openPath } from "@tauri-apps/api/shell";
 import { invoke } from "@tauri-apps/api/tauri";
 import type { FileEntry } from "../stores/scan";
+import { privacyMode, redactFilePath } from "../stores/privacy";
 import { formatBytes } from "../utils/format";
 
 type Props = {
@@ -278,7 +279,7 @@ export default function TopFiles(props: Props) {
       >
         <ol class="file-list">
           <Index each={visibleFiles()}>
-            {(file) => (
+            {(file, index) => (
               <li
                 class="file-row"
                 classList={{ "is-selected": selectedPath() === file().path }}
@@ -310,20 +311,27 @@ export default function TopFiles(props: Props) {
                     {formatBytes(file().size)}
                   </span>
                   <div class="file-row__text">
-                    <span class="file-path" title={file().path}>
-                      {file().path}
+                    <span
+                      class="file-path"
+                      title={redactFilePath(file().path, index)}
+                    >
+                      {redactFilePath(file().path, index)}
                     </span>
                     <Show when={logicalSizeHint(file())}>
                       {(hint) => <span class="file-app">{hint()}</span>}
                     </Show>
-                    <Show when={appHintForPath(file().path)}>
+                    {/* App hint can echo personal folder names (e.g. ".codex"),
+                        so suppress it while Privacy Mode is on. */}
+                    <Show when={!privacyMode() && appHintForPath(file().path)}>
                       {(hint) => <span class="file-app">{hint()}</span>}
                     </Show>
                   </div>
                 </div>
                 <Show when={selectedPath() === file().path}>
                   <div class="file-row__details">
-                    <div class="file-row__path">{file().path}</div>
+                    <div class="file-row__path">
+                      {redactFilePath(file().path, index)}
+                    </div>
                     <div class="file-row__path file-row__path--metric">
                       Disk used: {formatBytes(file().size)}
                     </div>
