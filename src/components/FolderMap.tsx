@@ -252,9 +252,16 @@ export default function FolderMap(props: Props) {
       return;
     }
     loadVersion += 1;
+    const version = loadVersion;
     setSelectedPath(null);
     setActionStatus(null);
-    void loadChildren(path, loadVersion, true);
+    const expandedDescendants = Object.entries(nodes())
+      .filter(([nodePath, state]) => state.expanded && nodePath !== path)
+      .map(([nodePath]) => nodePath);
+    void loadChildren(path, version, true);
+    for (const descendant of expandedDescendants) {
+      void loadChildren(descendant, version, true);
+    }
   };
 
   const clearCache = async () => {
@@ -838,41 +845,44 @@ export default function FolderMap(props: Props) {
           </Show>
         </div>
         <Show when={isFolder() && state()?.expanded}>
-          <Show when={state()?.loading}>
+          <Show when={(state()?.entries.length ?? 0) > 0}>
             <div
-              class="folder-tree__loading"
-              style={`--depth: ${nodeProps.depth + 1};`}
-            >
-              Measuring folder...
-            </div>
-          </Show>
-          <Show when={state()?.error}>
-            {(error) => (
-              <div
-                class="folder-tree__error"
-                style={`--depth: ${nodeProps.depth + 1};`}
-              >
-                {error()}
-              </div>
-            )}
-          </Show>
-          <Show when={!state()?.loading && !state()?.error}>
-            <Show
-              when={(state()?.entries.length ?? 0) > 0}
-              fallback={
-                <div
-                  class="folder-tree__empty"
-                  style={`--depth: ${nodeProps.depth + 1};`}
-                >
-                  Empty folder
-                </div>
-              }
+              classList={{ "is-refreshing": !!state()?.loading }}
+              aria-busy={!!state()?.loading}
             >
               <FolderNodes
                 entries={state()?.entries ?? []}
                 depth={nodeProps.depth + 1}
                 parentSize={entry.size}
               />
+            </div>
+          </Show>
+          <Show when={(state()?.entries.length ?? 0) === 0}>
+            <Show when={state()?.loading}>
+              <div
+                class="folder-tree__loading"
+                style={`--depth: ${nodeProps.depth + 1};`}
+              >
+                Measuring folder...
+              </div>
+            </Show>
+            <Show when={state()?.error}>
+              {(error) => (
+                <div
+                  class="folder-tree__error"
+                  style={`--depth: ${nodeProps.depth + 1};`}
+                >
+                  {error()}
+                </div>
+              )}
+            </Show>
+            <Show when={!state()?.loading && !state()?.error}>
+              <div
+                class="folder-tree__empty"
+                style={`--depth: ${nodeProps.depth + 1};`}
+              >
+                Empty folder
+              </div>
             </Show>
           </Show>
         </Show>
@@ -950,24 +960,35 @@ export default function FolderMap(props: Props) {
           )}
         </Show>
 
-        <Show when={rootState()?.loading}>
-          <div class="placeholder">Measuring folder...</div>
-        </Show>
-        <Show when={rootState()?.error}>
-          {(error) => <div class="placeholder is-error">{error()}</div>}
-        </Show>
-        <Show when={!rootState()?.loading && !rootState()?.error}>
-          <Show
-            when={(rootState()?.entries.length ?? 0) > 0}
-            fallback={<div class="placeholder">No folders or files found.</div>}
+        <Show when={(rootState()?.entries.length ?? 0) > 0}>
+          <div
+            class="folder-tree"
+            classList={{ "is-refreshing": !!rootState()?.loading }}
+            aria-busy={!!rootState()?.loading}
           >
-            <div class="folder-tree">
-              <FolderNodes
-                entries={rootState()?.entries ?? []}
-                depth={0}
-                parentSize={rootState()?.summary?.totalBytes ?? 0}
-              />
-            </div>
+            <FolderNodes
+              entries={rootState()?.entries ?? []}
+              depth={0}
+              parentSize={rootState()?.summary?.totalBytes ?? 0}
+            />
+          </div>
+          <Show when={rootState()?.error}>
+            {(error) => (
+              <div class="placeholder is-error" style={{ "margin-top": "10px" }}>
+                {error()}
+              </div>
+            )}
+          </Show>
+        </Show>
+        <Show when={(rootState()?.entries.length ?? 0) === 0}>
+          <Show when={rootState()?.loading}>
+            <div class="placeholder">Measuring folder...</div>
+          </Show>
+          <Show when={rootState()?.error}>
+            {(error) => <div class="placeholder is-error">{error()}</div>}
+          </Show>
+          <Show when={!rootState()?.loading && !rootState()?.error}>
+            <div class="placeholder">No folders or files found.</div>
           </Show>
         </Show>
       </Show>
