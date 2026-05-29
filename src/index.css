@@ -647,6 +647,11 @@ body {
   padding-right: 2px;
 }
 
+.folder-map .is-refreshing {
+  opacity: 0.5;
+  transition: opacity 0.15s ease;
+}
+
 .folder-tree__group {
   display: grid;
   gap: 7px;
