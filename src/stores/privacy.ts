@@ -83,6 +83,33 @@ export const redactFilePath = (path: string, index?: number): string => {
   return dir ? `${redactPath(dir)}/${placeholder}` : placeholder;
 };
 
+// Redact the full path of an entry inside a scanned tree. The scan root is
+// shown home-collapsed (it is already visible in the breadcrumb), every
+// folder name between the root and the entry is elided, and the entry's own
+// name becomes the same placeholder the list row shows, e.g.
+// /Users/jane/Documents/Taxes/2025 -> ~/Documents/…/Folder 2.
+export const redactEntryPath = (
+  path: string,
+  root: string,
+  index?: number,
+  kind: "folder" | "file" = "folder"
+): string => {
+  if (!privacyMode() || !path) {
+    return path;
+  }
+  const cleanPath = path.replace(/\/+$/, "");
+  const cleanRoot = root.replace(/\/+$/, "");
+  const placeholder = redactName("", index, kind);
+  if (cleanRoot && cleanPath.startsWith(`${cleanRoot}/`)) {
+    const depth = cleanPath.slice(cleanRoot.length + 1).split("/").length;
+    const middle = depth > 1 ? "/…" : "";
+    return `${redactPath(cleanRoot)}${middle}/${placeholder}`;
+  }
+  // Outside the scan root: keep nothing but the home-collapsed prefix.
+  const home = redactPath(cleanPath).startsWith("~") ? "~" : "";
+  return home ? `${home}/…/${placeholder}` : `…/${placeholder}`;
+};
+
 // Redact the volume / mount label shown in the status bar and sidebar.
 export const redactVolume = (name: string): string => {
   if (!privacyMode() || !name) {

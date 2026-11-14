@@ -13,7 +13,7 @@ import { writeText } from "@tauri-apps/api/clipboard";
 import { dirname } from "@tauri-apps/api/path";
 import { open as openPath } from "@tauri-apps/api/shell";
 import { invoke } from "@tauri-apps/api/tauri";
-import { redactName, redactPath } from "../stores/privacy";
+import { redactEntryPath, redactName, redactPath } from "../stores/privacy";
 import { formatBytes } from "../utils/format";
 
 type FolderEntryKind = "folder" | "file";
@@ -703,7 +703,10 @@ export default function FolderMap(props: Props) {
               aria-hidden="true"
             />
             <div class="folder-row__identity">
-              <div class="folder-row__name" title={redactPath(entry.path)}>
+              <div
+                class="folder-row__name"
+                title={redactEntryPath(entry.path, rootPath(), nodeProps.index, entry.kind)}
+              >
                 {redactName(entry.name, nodeProps.index, entry.kind)}
               </div>
               <div class="folder-row__meta">{metaText(entry)}</div>
@@ -796,7 +799,9 @@ export default function FolderMap(props: Props) {
           </div>
           <Show when={selectedPath() === entry.path}>
             <div class="folder-row__details">
-              <div class="file-row__path">{redactPath(entry.path)}</div>
+              <div class="file-row__path">
+                {redactEntryPath(entry.path, rootPath(), nodeProps.index, entry.kind)}
+              </div>
               <div class="file-row__path file-row__path--metric">
                 Disk used: {formatBytes(entry.size)}
               </div>
